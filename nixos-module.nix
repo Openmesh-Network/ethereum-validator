@@ -127,6 +127,22 @@ in
         ) network;
     in
     {
+      users = lib.mkMerge (
+        builtins.map
+          (u: {
+            users."${u}-${network}" = {
+              isSystemUser = true;
+              group = "${u}-${network}";
+            };
+            groups."${u}-${network}" = { };
+          })
+          [
+            cfg.executionClient.implementation
+            cfg.consensusClient.implementation
+            cfg.validatorClient.implementation
+          ]
+      );
+
       systemd.services."ethereum-validator-jwt" = {
         wantedBy = [ "network.target" ];
         description = "Generate Ethereum execution client JWT";
