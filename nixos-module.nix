@@ -126,87 +126,117 @@ in
           ])
         ) network;
     in
-    {
-      users = lib.mkMerge (
-        builtins.map
-          (u: {
-            users."${u}-${network}" = {
-              isSystemUser = true;
-              group = "${u}-${network}";
+    (lib.mkMerge [
+      {
+        systemd.services."ethereum-validator-jwt" = {
+          wantedBy = [ "network.target" ];
+          description = "Generate Ethereum execution client JWT";
+          serviceConfig = {
+            Type = "oneshot";
+          };
+          script = ''
+            ${lib.getExe pkgs.openssl} rand -hex 32 > ${jwt}
+          '';
+        };
+
+        # https://github.com/nix-community/ethereum.nix/blob/main/modules/geth/args.nix
+        services.ethereum.${executionClient}.${network} = lib.mkMerge [
+          {
+            enable = true;
+            package = inputs.ethereum.packages.${pkgs.system}.${cfg.executionClient.implementation};
+            openFirewall = true;
+            args = {
+              network = mapNetwork network cfg.executionClient.implementation;
+              authrpc.jwtsecret = jwt;
             };
-            groups."${u}-${network}" = { };
-          })
+          }
+          cfg.executionClient.settings
+        ];
+
+        # https://github.com/nix-community/ethereum.nix/blob/main/modules/lighthouse-beacon/args.nix
+        services.ethereum.${consensusClient}.${network} = lib.mkMerge [
+          {
+            enable = true;
+            package = inputs.ethereum.packages.${pkgs.system}.${cfg.consensusClient.implementation};
+            openFirewall = true;
+            args = {
+              network = mapNetwork network cfg.consensusClient.implementation;
+              execution-jwt = jwt;
+            };
+          }
+          cfg.consensusClient.settings
+        ];
+
+        # https://github.com/nix-community/ethereum.nix/blob/main/modules/lighthouse-validator/args.nix
+        services.ethereum.${validatorClient}.${network} = lib.mkMerge [
+          {
+            enable = true;
+            package = inputs.ethereum.packages.${pkgs.system}.${cfg.validatorClient.implementation};
+            openFirewall = true;
+            args = {
+              network = mapNetwork network cfg.validatorClient.implementation;
+              graffiti = "Ethereum validator running on Xnode!";
+            };
+          }
+          cfg.validatorClient.settings
+        ];
+
+        # https://github.com/nix-community/ethereum.nix/blob/main/modules/mev-boost/args.nix
+        services.ethereum.mev-boost.${network} = lib.mkMerge [
+          {
+            enable = true;
+            args = {
+              network = network;
+              relays = [ ];
+            };
+          }
+          cfg.mevBoost.settings
+        ];
+      }
+
+      # Register all users
+      (lib.mkMerge (
+        builtins.map
+          (
+            u:
+            let
+              id = "${u}-${network}";
+            in
+            {
+              users = {
+                users.${id} = {
+                  isSystemUser = true;
+                  group = id;
+                };
+                groups.${id} = { };
+              };
+            }
+          )
           [
             cfg.executionClient.implementation
             cfg.consensusClient.implementation
             cfg.validatorClient.implementation
           ]
-      );
+      ))
 
-      systemd.services."ethereum-validator-jwt" = {
-        wantedBy = [ "network.target" ];
-        description = "Generate Ethereum execution client JWT";
-        serviceConfig = {
-          Type = "oneshot";
-        };
-        script = ''
-          ${lib.getExe pkgs.openssl} rand -hex 32 > ${jwt}
-        '';
-      };
-
-      # https://github.com/nix-community/ethereum.nix/blob/main/modules/geth/args.nix
-      services.ethereum.${executionClient}.${network} = lib.mkMerge [
-        {
-          enable = true;
-          package = inputs.ethereum.packages.${pkgs.system}.${cfg.executionClient.implementation};
-          openFirewall = true;
-          args = {
-            network = mapNetwork network cfg.executionClient.implementation;
-            authrpc.jwtsecret = jwt;
-          };
-        }
-        cfg.executionClient.settings
-      ];
-
-      # https://github.com/nix-community/ethereum.nix/blob/main/modules/lighthouse-beacon/args.nix
-      services.ethereum.${consensusClient}.${network} = lib.mkMerge [
-        {
-          enable = true;
-          package = inputs.ethereum.packages.${pkgs.system}.${cfg.consensusClient.implementation};
-          openFirewall = true;
-          args = {
-            network = mapNetwork network cfg.consensusClient.implementation;
-            execution-jwt = jwt;
-          };
-        }
-        cfg.consensusClient.settings
-      ];
-
-      # https://github.com/nix-community/ethereum.nix/blob/main/modules/lighthouse-validator/args.nix
-      services.ethereum.${validatorClient}.${network} = lib.mkMerge [
-        {
-          enable = true;
-          package = inputs.ethereum.packages.${pkgs.system}.${cfg.validatorClient.implementation};
-          openFirewall = true;
-          args = {
-            network = mapNetwork network cfg.validatorClient.implementation;
-            graffiti = "Ethereum validator running on Xnode!";
-          };
-        }
-        cfg.validatorClient.settings
-      ];
-
-      # https://github.com/nix-community/ethereum.nix/blob/main/modules/mev-boost/args.nix
-      services.ethereum.mev-boost.${network} = lib.mkMerge [
-        {
-          enable = true;
-          args = {
-            network = network;
-            relays = [ ];
-          };
-        }
-        cfg.mevBoost.settings
-      ];
-    }
+      # Disable dynamic user
+      (lib.mkMerge (
+        builtins.map
+          (
+            u:
+            let
+              id = "${u}-${network}";
+            in
+            {
+              systemd.services.${id}.serviceConfig.DynamicUser = false;
+            }
+          )
+          [
+            executionClient
+            consensusClient
+            validatorClient
+          ]
+      ))
+    ])
   );
 }
